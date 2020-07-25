@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This Template will create the required infrastructure for the Prowler Fargate AWS Scanner
+Parameters:
+  ProwlerClusterName:
+    Type: String
+    Description: Name of the Cluster(ECS) that the Prowler Fargate Task will run in
+    Default: ProwlerCluster
+  ProwlerContainerName: 
+    Type: String
+    Description: Name of the Prowler Container Definition within the ECS Task
+    Default: prowler
+  ProwlerContainerInfo: 
+    Type: String
+    Description: ECR URI of the Prowler container image
+  ProwlerExecutionRole:
+    Type: String
+    Description: ARN of the IAM Task Execution Role for ECS - To pull images from ECR and send logs to CloudWatch
+  ProwlerTaskRole:
+    Type: String
+    Description: ARN of the Task IAM Role that gives Prowler permissions to perform required vulnureability analysis
+  ProwlerSecurityGroup:
+    Type: String
+    Description: Security Group that allows HTTPS 443 inbound/outbound
+  ProwlerScheduledSubnet1:
+    Type: String
+    Description: Subnet Id in which Prowler can be scheduled to Run
+  ProwlerScheduledSubnet2:
+    Type: String
+    Description: A secondary Subnet Id in which Prowler can be scheduled to Run 
+Resources:
+  ProwlerECSCloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Join [ "-", [ !Ref ProwlerContainerName, !Ref 'AWS::StackName' ] ]
+      RetentionInDays: 90
+  ProwlerECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties: 
+      ClusterName: !Ref ProwlerClusterName
+  ProwlerECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties: 
+      ContainerDefinitions: 
+        -   
+          Image: !Ref ProwlerContainerInfo
+          Name: !Ref ProwlerContainerName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ProwlerECSCloudWatchLogsGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+      Cpu: 2048
+      ExecutionRoleArn: !Ref ProwlerExecutionRole
+      Memory: 4096
+      NetworkMode: awsvpc
+      TaskRoleArn: !Ref ProwlerTaskRole
+      Family: ProwlerSecurityCheckTask
+      RequiresCompatibilities:
+        - FARGATE
+  ProwlerTaskScheduler:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "rate(7 days)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ProwlerECSCluster.Arn
+          RoleArn: !Ref ProwlerTaskRole
+          Id: prowlerTaskScheduler
+          EcsParameters:
+            TaskDefinitionArn: !Ref ProwlerECSTaskDefinition
+            TaskCount: 1
+            LaunchType: FARGATE
+            PlatformVersion: 'LATEST'
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: ENABLED
+                SecurityGroups:
+                  - !Ref ProwlerSecurityGroup
+                Subnets:
+                  - !Ref ProwlerScheduledSubnet1
+                  - !Ref ProwlerScheduledSubnet2
+Outputs:
+    CloudWatchLogGroupName:
+        Description: The name of the CloudWatch log group
+        Value: !Ref ProwlerECSCloudWatchLogsGroup
